@@ -1,10 +1,12 @@
 # Dotfiles
 
-Configuration Kitty + tmux + fish, prévue pour Ubuntu sous WSL2 et Linux. Kitty lance fish, puis fish attache une session tmux distincte à chaque onglet Kitty. Les sous-onglets et les splits sont gérés par tmux.
+Configuration Kitty + tmux + fish, prévue pour Ubuntu sous WSL2, Debian et Fedora. Kitty lance fish, puis fish attache une session tmux distincte à chaque onglet Kitty. Les sous-onglets et les splits sont gérés par tmux.
 
 ## Installation
 
 Prévoir `git`, `kitty`, `tmux` et `fish`. Le script ne les installe pas et ne change pas le shell de connexion. Une fois le dépôt privé créé sur GitHub et l'accès SSH configuré :
+
+Sur Debian, installer les prérequis avec `sudo apt install git kitty tmux fish`. Sur Fedora, utiliser `sudo dnf install git kitty tmux fish`. Kitty nécessite une session graphique ; l'installateur fonctionne aussi sans en lancer une.
 
 ```sh
 git clone git@github.com:charlestrodet/dotfiles.git ~/repos/dotfiles
