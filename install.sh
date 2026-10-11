@@ -25,7 +25,12 @@ repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 files='
 .tmux.conf
 .config/kitty/kitty.conf
+.config/kitty/kitty-projects.conf
 .config/kitty/current-theme.conf
+.config/kitty/project_mode.py
+.config/kitty/project_state.py
+.config/kitty/project_watcher.py
+.config/tmux/proportional.py
 .config/fish/config.fish
 .config/fish/functions/fish_prompt.fish
 '
@@ -37,6 +42,11 @@ for relative_path in $files; do
         exit 1
     fi
 done
+
+if ! command -v python3 >/dev/null 2>&1; then
+    printf 'python3 is required for Kitty project restoration.\n' >&2
+    exit 1
+fi
 
 for relative_path in $files; do
     source_path=$repo_dir/home/$relative_path
@@ -71,3 +81,8 @@ for relative_path in $files; do
         ln -s -- "$source_path" "$target_path"
     fi
 done
+
+printf 'Initialize local Kitty project state: %s\n' "$HOME/.local/state/kitty-tmux"
+if [ "$dry_run" -eq 0 ]; then
+    python3 "$repo_dir/home/.config/kitty/project_state.py" init
+fi

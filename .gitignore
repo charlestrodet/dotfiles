@@ -1,6 +1,8 @@
 # Local editor and OS files
 *~
 *.swp
+__pycache__/
+*.pyc
 .DS_Store
 
 # Never import shell state, credentials, or local backups.
