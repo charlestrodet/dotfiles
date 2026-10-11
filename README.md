@@ -1,12 +1,12 @@
 # Dotfiles
 
-Configuration Kitty + tmux + fish, prévue pour Ubuntu sous WSL2, Debian et Fedora. Kitty lance fish, puis fish attache une session tmux distincte à chaque onglet Kitty. Les sous-onglets et les splits sont gérés par tmux.
+Configuration Kitty + tmux + fish pour Linux, notamment Debian, Fedora et Ubuntu. Kitty lance fish, puis fish attache une session tmux distincte à chaque onglet Kitty. Les sous-onglets et les splits sont gérés par tmux.
 
 ## Installation
 
-Prévoir `git`, `kitty`, `tmux` et `fish`. Le script ne les installe pas et ne change pas le shell de connexion. Une fois le dépôt privé créé sur GitHub et l'accès SSH configuré :
+Prévoir `git`, `kitty`, `tmux` et `fish`. Le script ne les installe pas et ne change pas le shell de connexion. Sur Debian, installer les prérequis avec `sudo apt install git kitty tmux fish`. Sur Fedora, utiliser `sudo dnf install git kitty tmux fish`. Kitty nécessite une session graphique ; l'installateur fonctionne aussi sans en lancer une.
 
-Sur Debian, installer les prérequis avec `sudo apt install git kitty tmux fish`. Sur Fedora, utiliser `sudo dnf install git kitty tmux fish`. Kitty nécessite une session graphique ; l'installateur fonctionne aussi sans en lancer une.
+Une fois le dépôt privé créé sur GitHub et l'accès SSH configuré :
 
 ```sh
 git clone git@github.com:charlestrodet/dotfiles.git ~/repos/dotfiles
@@ -35,8 +35,8 @@ Pour appliquer les changements à une fenêtre Kitty déjà ouverte, recharger K
 | Zoom du pane | `Ctrl+Shift+F` |
 | Égaliser les panes | `Ctrl+A`, puis `=` |
 
-Les combinaisons `|` et `Alt+Shift+[` / `]` ont été réglées pour le clavier actuel sous WSLg. Les tester dans Kitty sur un autre clavier ou serveur graphique.
+Les combinaisons `|` et `Alt+Shift+[` / `]` dépendent de la disposition du clavier et du serveur graphique. Les tester dans Kitty sur chaque machine.
 
 ## Contenu et limites
 
-Le dépôt contient le thème Dracula de Kitty avec son attribution dans `current-theme.conf`. Les historiques, `fish_variables`, les clés et les sauvegardes locales restent hors du dépôt. La persistance tmux dure tant que le serveur tmux continue de tourner ; un redémarrage complet de WSL ou du système termine ses processus.
+Le dépôt contient le thème Dracula de Kitty avec son attribution dans `current-theme.conf`. Les historiques, `fish_variables`, les clés et les sauvegardes locales restent hors du dépôt. La persistance tmux dure tant que le serveur tmux continue de tourner ; un redémarrage du système termine ses processus.
