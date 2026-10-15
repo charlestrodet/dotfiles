@@ -3,6 +3,7 @@
 import importlib.util
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 MODULE = Path(__file__).resolve().parents[1] / "home/.config/tmux/proportional.py"
@@ -18,6 +19,60 @@ def layout(body):
 
 
 class ProportionalLayoutTest(unittest.TestCase):
+    def test_update_uses_two_tmux_calls_for_split(self):
+        before = "0000,102x20,0,0{70x20,0,0,1,31x20,71,0,2}"
+        after = "0000,102x20,0,0{70x20,0,0,1,15x20,71,0,2,15x20,87,0,3}"
+        calls = []
+
+        def fake_tmux(*args, **_kwargs):
+            calls.append(args)
+            if args[0] == "display-message":
+                return after + proportional.SEP + before
+            return ""
+
+        with patch.object(proportional, "tmux", side_effect=fake_tmux):
+            proportional.update("@1")
+
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0][0], "display-message")
+        commands = []
+        for arg in calls[1]:
+            if arg == ";":
+                commands.append([])
+            elif not commands:
+                commands.append([arg])
+            else:
+                commands[-1].append(arg)
+        self.assertEqual(commands[0],
+                         ["set-option", "-w", "-t", "@1", proportional.LAYOUT_OPTION, after])
+        self.assertEqual(commands[1],
+                         ["set-option", "-w", "-t", "@1", proportional.COUNT_OPTION, "3"])
+        self.assertEqual(commands[2:4],
+                         [["resize-pane", "-t", "%1", "-x", "46"],
+                          ["resize-pane", "-t", "%2", "-x", "21"]])
+        self.assertEqual(commands[4],
+                         ["set-option", "-w", "-F", "-t", "@1",
+                          proportional.LAYOUT_OPTION, "#{window_layout}"])
+
+    def test_first_layout_still_seeds_without_resizing(self):
+        layout = "0000,100x20,0,0,1"
+        calls = []
+
+        def fake_tmux(*args, **_kwargs):
+            calls.append(args)
+            if args[0] == "display-message":
+                return layout + proportional.SEP
+            return ""
+
+        with patch.object(proportional, "tmux", side_effect=fake_tmux):
+            proportional.update("@1")
+
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[1],
+                         ("set-option", "-w", "-t", "@1", proportional.LAYOUT_OPTION,
+                          layout, ";", "set-option", "-w", "-t", "@1",
+                          proportional.COUNT_OPTION, "1"))
+
     def test_split_reserves_one_share_and_keeps_old_ratio(self):
         before = layout("102x20,0,0{70x20,0,0,1,31x20,71,0,2}")
         after = layout("102x20,0,0{70x20,0,0,1,15x20,71,0,2,15x20,87,0,3}")

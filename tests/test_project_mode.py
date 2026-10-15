@@ -1,4 +1,5 @@
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -30,8 +31,13 @@ class ProjectModeTest(unittest.TestCase):
                 text=True, env=env,
             )
             try:
-                self.assertEqual(first.stdout.readline(), "include kitty-projects.conf\n")
-                self.assertEqual(first.stdout.readline(), "include kitty-projects.conf\n")
+                title_map = f"map kitty_mod+alt+t kitten {shlex.quote(str(SCRIPT.resolve().with_name('project_title.py')))}\n"
+                profile = ("include kitty-projects.conf\n"
+                           f"shell python3 {shlex.quote(str(SCRIPT.resolve().with_name('project_state.py')))} attach-auto\n"
+                           f"startup_session {shlex.quote(str(Path(directory) / 'startup.kitty-session'))}\n"
+                           + title_map)
+                self.assertEqual("".join(first.stdout.readline() for _ in range(4)), profile)
+                self.assertEqual("".join(first.stdout.readline() for _ in range(4)), profile)
                 self.assertEqual(first.stdout.readline(), "READY\n")
 
                 plain = subprocess.Popen(
@@ -55,7 +61,7 @@ class ProjectModeTest(unittest.TestCase):
                     (sys.executable, "-u", "-c", "import runpy,sys; runpy.run_path(sys.argv[1])", str(SCRIPT)),
                     capture_output=True, text=True, env=env, timeout=5, check=True,
                 )
-                self.assertEqual(next_launch.stdout, "include kitty-projects.conf\n")
+                self.assertEqual(next_launch.stdout, profile)
             finally:
                 if first.poll() is None:
                     first.kill()

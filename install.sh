@@ -29,6 +29,7 @@ files='
 .config/kitty/current-theme.conf
 .config/kitty/project_mode.py
 .config/kitty/project_state.py
+.config/kitty/project_title.py
 .config/kitty/project_watcher.py
 .config/tmux/proportional.py
 .config/fish/config.fish

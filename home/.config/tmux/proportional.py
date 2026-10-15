@@ -5,11 +5,13 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 
 LAYOUT_OPTION = "@kitty_tmux_proportional_layout"
 COUNT_OPTION = "@kitty_tmux_proportional_count"
+SEP = "|"
 CELL = re.compile(r"(\d+)x(\d+),(\d+),(\d+)")
 
 
@@ -194,18 +196,35 @@ def current(window: str) -> str:
     return tmux("display-message", "-p", "-t", window, "#{window_layout}")
 
 
-def remember(window: str, layout: str) -> None:
-    tmux("set-option", "-w", "-t", window, LAYOUT_OPTION, layout)
-    tmux("set-option", "-w", "-t", window, COUNT_OPTION, str(len(parse(layout).panes())))
+def current_and_previous(window: str) -> tuple[str, str]:
+    output = tmux("display-message", "-p", "-t", window,
+                  f"#{{window_layout}}{SEP}#{{{LAYOUT_OPTION}}}")
+    layout, separator, previous = output.partition(SEP)
+    if not separator:
+        raise RuntimeError("tmux did not return the window layout")
+    return layout, previous
+
+
+def remember(window: str, layout: str,
+             changes: Sequence[tuple[int, str, int]] = ()) -> None:
+    # One tmux command sequence keeps each layout update to a single client call.
+    commands = ["set-option", "-w", "-t", window, LAYOUT_OPTION, layout,
+                ";", "set-option", "-w", "-t", window, COUNT_OPTION,
+                str(len(parse(layout).panes()))]
+    for pane, axis, size in changes:
+        commands.extend((";", "resize-pane", "-t", f"%{pane}",
+                         "-x" if axis == "h" else "-y", str(size)))
+    if changes:
+        commands.extend((";", "set-option", "-w", "-F", "-t", window,
+                         LAYOUT_OPTION, "#{window_layout}"))
+    tmux(*commands)
 
 
 def update(window: str) -> None:
     try:
-        layout = current(window)
+        layout, previous = current_and_previous(window)
     except RuntimeError:  # The final pane may have destroyed its window.
         return
-    previous = tmux("show-options", "-w", "-v", "-t", window,
-                    LAYOUT_OPTION, check=False)
     if not previous:
         remember(window, layout)
         return
@@ -213,15 +232,7 @@ def update(window: str) -> None:
         changes = plan(parse(previous), parse(layout))
     except ValueError:
         changes = []
-    remember(window, layout)  # Subsequent resize events must not replay this change.
-    flag = "-x" if changes and changes[0][1] == "h" else "-y"
-    for pane, _, size in changes:
-        tmux("resize-pane", "-t", f"%{pane}", flag, str(size))
-    if changes:
-        try:
-            remember(window, current(window))
-        except RuntimeError:
-            pass
+    remember(window, layout, changes)
 
 
 def seed_all() -> None:

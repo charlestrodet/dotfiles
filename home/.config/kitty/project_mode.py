@@ -2,6 +2,7 @@
 
 import fcntl
 import os
+import shlex
 import sys
 from pathlib import Path
 
@@ -33,3 +34,9 @@ def project_mode():
 
 if project_mode():
     print("include kitty-projects.conf")
+    project_state = Path(__file__).resolve().with_name("project_state.py")
+    print(f"shell python3 {shlex.quote(str(project_state))} attach-auto")
+    state_dir = Path(os.environ.get("KITTY_TMUX_STATE_DIR", Path.home() / ".local/state/kitty-tmux"))
+    print(f"startup_session {shlex.quote(str(state_dir / 'startup.kitty-session'))}")
+    title_kitten = Path(__file__).resolve().with_name("project_title.py")
+    print(f"map kitty_mod+alt+t kitten {shlex.quote(str(title_kitten))}")

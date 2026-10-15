@@ -5,6 +5,7 @@ import argparse
 import fcntl
 import json
 import os
+import pwd
 import subprocess
 import sys
 import tempfile
@@ -18,7 +19,8 @@ PROJECTS_FILE = STATE_DIR / "projects.json"
 STARTUP_FILE = STATE_DIR / "startup.kitty-session"
 SCRIPT = Path(__file__).resolve()
 MAX_HISTORY_BYTES = 2 * 1024 * 1024
-SEP = "\x1f"
+# tmux 3.5 escapes ASCII unit separators as literal \037; tabs survive intact.
+SEP = "\t"
 
 
 def ensure_state_dir():
@@ -126,15 +128,19 @@ def register(title, root, kitty_pid, window_id, previous_id=None, startup_id=Non
 def forget(project_id, kitty_pid=None, window_id=None):
     if not project_id:
         return
+    with state_lock():
+        data = read_state()
+        data["projects"] = [p for p in data["projects"] if p["id"] != project_id]
+        if kitty_pid is not None and window_id is not None:
+            data["bindings"].pop(binding_key(kitty_pid, window_id), None)
+        write_state(data)
+
+
+def delete_snapshot(project_id):
+    # Wait for an in-flight capture after the project has left the active list.
     with state_lock("snapshot"):
-        with state_lock():
-            data = read_state()
-            data["projects"] = [p for p in data["projects"] if p["id"] != project_id]
-            if kitty_pid is not None and window_id is not None:
-                data["bindings"].pop(binding_key(kitty_pid, window_id), None)
-            write_state(data)
-        snapshot = STATE_DIR / f"{project_id}.json"
-        snapshot.unlink(missing_ok=True)
+        for suffix in (".json", ".recovery.json"):
+            (STATE_DIR / f"{project_id}{suffix}").unlink(missing_ok=True)
 
 
 def clear_binding(kitty_pid, window_id):
@@ -179,20 +185,28 @@ def snapshot_project(project):
     name = session_name(project["id"])
     if not tmux_has_session(name):
         return False
+    window_rows = tmux("list-windows", "-t", f"={name}", "-F",
+                       SEP.join(("#{window_id}", "#{window_index}", "#{window_name}",
+                                 "#{window_layout}", "#{window_active}",
+                                 "#{window_zoomed_flag}"))).stdout.splitlines()
+    pane_rows = tmux("list-panes", "-s", "-t", f"={name}", "-F",
+                     SEP.join(("#{window_id}", "#{pane_id}", "#{pane_index}",
+                               "#{pane_current_path}", "#{pane_active}"))).stdout.splitlines()
+    panes_by_window = {}
+    for row in pane_rows:
+        window_id, pane_id, pane_index, *path_and_active = row.split(SEP)
+        cwd, active = SEP.join(path_and_active[:-1]), path_and_active[-1]
+        panes_by_window.setdefault(window_id, []).append(
+            {"index": int(pane_index), "cwd": cwd, "active": active == "1",
+             "history": pane_history(pane_id)})
     windows = []
-    for window_id in tmux("list-windows", "-t", f"={name}", "-F", "#{window_id}").stdout.splitlines():
-        info = tmux("display-message", "-p", "-t", window_id,
-                    f"#{{window_index}}{SEP}#{{window_name}}{SEP}#{{window_layout}}{SEP}#{{window_active}}{SEP}#{{window_zoomed_flag}}")
-        index, title, layout, active, zoomed = info.stdout.rstrip("\n").split(SEP)
-        panes = []
-        for pane_id in tmux("list-panes", "-t", window_id, "-F", "#{pane_id}").stdout.splitlines():
-            info = tmux("display-message", "-p", "-t", pane_id,
-                        f"#{{pane_index}}{SEP}#{{pane_current_path}}{SEP}#{{pane_active}}")
-            pane_index, cwd, pane_active = info.stdout.rstrip("\n").split(SEP)
-            panes.append({"index": int(pane_index), "cwd": cwd, "active": pane_active == "1",
-                          "history": pane_history(pane_id)})
+    for row in window_rows:
+        window_id, index, *title_and_layout = row.split(SEP)
+        title = SEP.join(title_and_layout[:-3])
+        layout, active, zoomed = title_and_layout[-3:]
         windows.append({"index": int(index), "title": title, "layout": layout,
-                        "active": active == "1", "zoomed": zoomed == "1", "panes": panes})
+                        "active": active == "1", "zoomed": zoomed == "1",
+                        "panes": panes_by_window.get(window_id, [])})
     if not windows:
         return False
     snapshot = {"version": 1, "windows": windows}
@@ -225,6 +239,12 @@ def existing_directory(path, fallback):
     return str(Path.home())
 
 
+def preserve_failed_snapshot(project_id, original):
+    recovery = STATE_DIR / f"{project_id}.recovery.json"
+    if not recovery.exists():
+        atomic_write(recovery, original)
+
+
 def restore_project(project):
     project_id = project["id"]
     name = session_name(project_id)
@@ -233,16 +253,23 @@ def restore_project(project):
     snapshot_file = STATE_DIR / f"{project_id}.json"
     if not snapshot_file.exists():
         return
-    snapshot = json.loads(snapshot_file.read_text(encoding="utf-8"))
+    original = snapshot_file.read_text(encoding="utf-8")
+    try:
+        snapshot = json.loads(original)
+    except ValueError:
+        preserve_failed_snapshot(project_id, original)
+        raise
     windows = snapshot.get("windows", []) if snapshot.get("version") == 1 else []
     if not windows:
         return
     created = False
     restored_windows = {}
-    try:
-        for window_number, window in enumerate(windows):
+    incomplete = False
+    for window_number, window in enumerate(windows):
+        try:
             panes = window["panes"]
             if not panes:
+                incomplete = True
                 continue
             first = panes[0]
             cwd = existing_directory(first.get("cwd"), project.get("root"))
@@ -259,33 +286,54 @@ def restore_project(project):
             window_id = next(iter(after - before))
             restored_windows[window["index"]] = window_id
             pane_ids = [tmux("list-panes", "-t", window_id, "-F", "#{pane_id}").stdout.splitlines()[0]]
+            complete = True
             for pane_number, pane in enumerate(panes[1:], start=1):
                 cwd = existing_directory(pane.get("cwd"), project.get("root"))
                 before_panes = set(tmux("list-panes", "-t", window_id, "-F", "#{pane_id}").stdout.splitlines())
-                tmux("split-window", "-d", "-h", "-t", window_id, "-c", cwd,
-                     *pane_command(project_id, window_number, pane_number))
+                result = tmux("split-window", "-d", "-h", "-t", window_id, "-c", cwd,
+                              *pane_command(project_id, window_number, pane_number), check=False)
+                if result.returncode:
+                    print(f"Could not restore pane {pane_number + 1} in {window['title']}: "
+                          f"{result.stderr.strip()}", file=sys.stderr)
+                    complete = False
+                    incomplete = True
+                    break
                 after_panes = set(tmux("list-panes", "-t", window_id, "-F", "#{pane_id}").stdout.splitlines())
                 pane_ids.append(next(iter(after_panes - before_panes)))
-                tmux("select-layout", "-t", window_id, "tiled")
-            if window.get("layout"):
-                tmux("select-layout", "-t", window_id, window["layout"])
+                tmux("select-layout", "-t", window_id, "tiled", check=False)
+            if complete and window.get("layout"):
+                result = tmux("select-layout", "-t", window_id, window["layout"], check=False)
+                if result.returncode:
+                    print(f"Could not restore layout for {window['title']}; using tiled layout: "
+                          f"{result.stderr.strip()}", file=sys.stderr)
+                    tmux("select-layout", "-t", window_id, "tiled", check=False)
+                    incomplete = True
+            elif not complete:
+                tmux("select-layout", "-t", window_id, "tiled", check=False)
             active_pane_number = next((n for n, p in enumerate(panes) if p.get("active")), 0)
-            active_pane_id = pane_ids[active_pane_number]
-            tmux("select-pane", "-t", active_pane_id)
+            active_pane_id = pane_ids[min(active_pane_number, len(pane_ids) - 1)]
+            tmux("select-pane", "-t", active_pane_id, check=False)
             if window.get("zoomed"):
-                tmux("resize-pane", "-Z", "-t", active_pane_id)
-        if created:
-            active_window = next((w for w in windows if w.get("active")), windows[0])
-            tmux("select-window", "-t", restored_windows[active_window["index"]])
-    except (OSError, subprocess.CalledProcessError, ValueError, KeyError, IndexError):
-        if created:
-            tmux("kill-session", "-t", f"={name}", check=False)
-        raise
+                tmux("resize-pane", "-Z", "-t", active_pane_id, check=False)
+        except (OSError, subprocess.CalledProcessError, ValueError, KeyError,
+                IndexError, StopIteration, TypeError) as error:
+            incomplete = True
+            print(f"Could not fully restore window {window_number + 1} in "
+                  f"{project['title']}: {error}", file=sys.stderr)
+    if incomplete:
+        preserve_failed_snapshot(project_id, original)
+    active_window = next((restored_windows.get(w.get("index")) for w in windows
+                          if isinstance(w, dict) and w.get("active") and
+                          w.get("index") in restored_windows), None)
+    if active_window is None:
+        active_window = next(iter(restored_windows.values()), None)
+    if active_window:
+        tmux("select-window", "-t", active_window, check=False)
 
 
 def attach_auto():
     if os.environ.get("TMUX"):
-        raise RuntimeError("Refusing to nest tmux")
+        exec_machine_shell()
     kitty_pid = os.environ["KITTY_PID"]
     window_id = os.environ["KITTY_WINDOW_ID"]
     data = read_state()
@@ -319,7 +367,11 @@ def pane_shell(project_id, window_number, pane_number):
             sys.stdout.buffer.flush()
     except (OSError, ValueError, KeyError, IndexError):
         pass
-    shell = os.environ.get("SHELL") or "fish"
+    exec_machine_shell()
+
+
+def exec_machine_shell():
+    shell = os.environ.get("SHELL") or pwd.getpwuid(os.getuid()).pw_shell or "/bin/sh"
     os.execvp(shell, (shell,))
 
 
@@ -331,6 +383,8 @@ def main():
     sub.add_parser("snapshot-all")
     one = sub.add_parser("snapshot-one")
     one.add_argument("project_id")
+    cleanup = sub.add_parser("delete-snapshot")
+    cleanup.add_argument("project_id")
     pane = sub.add_parser("pane-shell")
     pane.add_argument("project_id")
     pane.add_argument("window_number", type=int)
@@ -347,6 +401,8 @@ def main():
             project = next((p for p in read_state()["projects"] if p["id"] == args.project_id), None)
             if project:
                 snapshot_project(project)
+    elif args.command == "delete-snapshot":
+        delete_snapshot(args.project_id)
     elif args.command == "pane-shell":
         pane_shell(args.project_id, args.window_number, args.pane_number)
 
