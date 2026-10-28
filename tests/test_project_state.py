@@ -182,13 +182,22 @@ class ProjectStateTest(unittest.TestCase):
         with patch.object(state, "tmux_has_session", return_value=True), \
              patch.object(state, "tmux", return_value=result) as tmux, \
              patch.object(title_kitten, "has_tab_change_event", return_value=False):
-            title_kitten.handle_result([], None, 7, boss)
+            title_kitten.handle_result([str(KITTY_DIR / "project_title.py")], None, 7, boss)
         project_id = state.read_state()["projects"][0]["id"]
         self.assertEqual(tab.name, "Debian")
         self.assertIn("new_tab Debian", state.STARTUP_FILE.read_text())
         tmux.assert_any_call("rename-session", "-t", f"=kitty-{watcher.os.getpid()}-7",
                              state.session_name(project_id))
         self.snapshot.assert_called_with("snapshot-one", project_id)
+
+    def test_rename_kitten_loads_without_file_global(self):
+        namespace = {"__name__": "kitten"}
+        script = KITTY_DIR / "project_title.py"
+        with patch.dict(sys.modules, {"kittens": kitten_pkg, "kittens.tui": kitten_tui,
+                                      "kittens.tui.handler": kitten_handler}):
+            exec(compile(script.read_text(), str(script), "exec"), namespace)
+        self.assertNotIn("__file__", namespace)
+        self.assertTrue(callable(namespace["handle_result"]))
 
     def test_rename_kitten_leaves_plain_kitty_unwatched(self):
         window = Window()
