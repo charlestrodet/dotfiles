@@ -7,6 +7,7 @@ import subprocess
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from functools import cached_property
 
 
 LAYOUT_OPTION = "@kitty_tmux_proportional_layout"
@@ -23,10 +24,11 @@ class Cell:
     axis: str | None = None  # h: left/right, v: top/bottom
     children: list[Cell] = field(default_factory=list)
 
+    @cached_property
     def panes(self) -> frozenset[int]:
         if self.pane is not None:
             return frozenset((self.pane,))
-        return frozenset().union(*(child.panes() for child in self.children))
+        return frozenset().union(*(child.panes for child in self.children))
 
     def size(self, axis: str) -> int:
         return self.width if axis == "h" else self.height
@@ -106,7 +108,7 @@ def parent_of(node: Cell, pane: int) -> Cell | None:
 
 
 def matching(node: Cell, panes: frozenset[int]) -> Cell | None:
-    return next((cell for cell in walk(node) if cell.panes() == panes), None)
+    return next((cell for cell in walk(node) if cell.panes == panes), None)
 
 
 def shares(total: int, weights: list[int], minimums: list[int]) -> list[int]:
@@ -137,17 +139,17 @@ def shares(total: int, weights: list[int], minimums: list[int]) -> list[int]:
 
 def plan(before: Cell, after: Cell) -> list[tuple[int, str, int]]:
     """Return absolute pane sizes for the changed sibling group only."""
-    added = after.panes() - before.panes()
-    removed = before.panes() - after.panes()
+    added = after.panes - before.panes
+    removed = before.panes - after.panes
     if len(added) == 1 and not removed:
         new_pane = next(iter(added))
         group = parent_of(after, new_pane)
         if group is None:
             return []
         axis = group.axis
-        new_index = next(i for i, c in enumerate(group.children) if new_pane in c.panes())
+        new_index = next(i for i, c in enumerate(group.children) if new_pane in c.panes)
         other = [c for i, c in enumerate(group.children) if i != new_index]
-        old = [matching(before, c.panes()) for c in other]
+        old = [matching(before, c.panes) for c in other]
         if any(c is None for c in old):
             return []
         available = group.size(axis) - len(group.children) + 1
@@ -167,11 +169,11 @@ def plan(before: Cell, after: Cell) -> list[tuple[int, str, int]]:
         old_group = parent_of(before, old_pane)
         if old_group is None or len(old_group.children) < 3:
             return []
-        group = matching(after, old_group.panes() - {old_pane})
+        group = matching(after, old_group.panes - {old_pane})
         if group is None or group.axis != old_group.axis:
             return []
         axis = group.axis
-        old = [matching(old_group, c.panes()) for c in group.children]
+        old = [matching(old_group, c.panes) for c in group.children]
         if any(c is None for c in old):
             return []
         available = group.size(axis) - len(group.children) + 1
@@ -210,7 +212,7 @@ def remember(window: str, layout: str,
     # One tmux command sequence keeps each layout update to a single client call.
     commands = ["set-option", "-w", "-t", window, LAYOUT_OPTION, layout,
                 ";", "set-option", "-w", "-t", window, COUNT_OPTION,
-                str(len(parse(layout).panes()))]
+                str(len(parse(layout).panes))]
     for pane, axis, size in changes:
         commands.extend((";", "resize-pane", "-t", f"%{pane}",
                          "-x" if axis == "h" else "-y", str(size)))

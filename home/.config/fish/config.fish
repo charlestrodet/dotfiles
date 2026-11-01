@@ -1,1 +1,1 @@
-# Kitty's project profile starts tmux directly; fish needs no startup hook.
+# Project command tracking and restoration live in conf.d/kitty-tmux.fish.

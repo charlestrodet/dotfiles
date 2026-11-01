@@ -1,3 +1,4 @@
+import json
 import os
 import shlex
 import subprocess
@@ -11,9 +12,23 @@ SCRIPT = Path(__file__).resolve().parents[1] / "home/.config/kitty/project_mode.
 
 
 class ProjectModeTest(unittest.TestCase):
+    def test_launch_drops_parent_tmux_context(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env = {**os.environ, "KITTY_TMUX_STATE_DIR": directory,
+                   "TMUX": "/tmp/other-server,1,0", "TMUX_PANE": "%9"}
+            code = "import os,runpy,sys; runpy.run_path(sys.argv[1]); print(os.getenv('TMUX'), os.getenv('TMUX_PANE'))"
+            result = subprocess.run((sys.executable, "-c", code, str(SCRIPT)),
+                                    env=env, capture_output=True, text=True, check=True)
+            self.assertEqual(result.stdout.splitlines()[-1], "None None")
+
     def test_only_first_process_keeps_project_role_until_exit(self):
         with tempfile.TemporaryDirectory() as directory:
             env = {**os.environ, "KITTY_TMUX_STATE_DIR": directory}
+            projects = [{"id": "a" * 32, "title": "one", "root": directory},
+                        {"id": "b" * 32, "title": "two", "root": directory}]
+            Path(directory, "projects.json").write_text(json.dumps(
+                {"version": 1, "projects": projects}))
+            Path(directory, "startup.kitty-session").write_text("stale\n")
             first_code = (
                 "import runpy,sys; "
                 "runpy.run_path(sys.argv[1]); runpy.run_path(sys.argv[1]); "
@@ -37,6 +52,7 @@ class ProjectModeTest(unittest.TestCase):
                            f"startup_session {shlex.quote(str(Path(directory) / 'startup.kitty-session'))}\n"
                            + title_map)
                 self.assertEqual("".join(first.stdout.readline() for _ in range(4)), profile)
+                self.assertEqual(Path(directory, "startup.kitty-session").read_text().count("new_tab "), 2)
                 self.assertEqual("".join(first.stdout.readline() for _ in range(4)), profile)
                 self.assertEqual(first.stdout.readline(), "READY\n")
 

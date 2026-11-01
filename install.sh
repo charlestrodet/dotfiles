@@ -22,36 +22,41 @@ case "${HOME-}" in
 esac
 
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
-files='
-.tmux.conf
-.config/kitty/kitty.conf
-.config/kitty/kitty-projects.conf
-.config/kitty/current-theme.conf
-.config/kitty/project_mode.py
-.config/kitty/project_state.py
-.config/kitty/project_title.py
-.config/kitty/project_watcher.py
-.config/tmux/proportional.py
-.config/fish/config.fish
-.config/fish/functions/fish_prompt.fish
-'
-
-# Check the source tree before changing the destination.
-for relative_path in $files; do
-    if [ ! -f "$repo_dir/home/$relative_path" ]; then
-        printf 'Missing source: %s\n' "$repo_dir/home/$relative_path" >&2
+home_dir=$repo_dir/home
+if ! command -v git >/dev/null 2>&1 || [ ! -d "$home_dir" ]; then
+    printf 'A Git checkout with a home/ directory is required.\n' >&2
+    exit 1
+fi
+file_list=$(mktemp)
+trap 'rm -f "$file_list"' 0
+git -C "$repo_dir" -c core.quotePath=false ls-files --cached --others --exclude-standard -- home > "$file_list"
+if [ ! -s "$file_list" ]; then
+    printf 'No dotfiles found under %s\n' "$home_dir" >&2
+    exit 1
+fi
+while IFS= read -r relative_path; do
+    if [ ! -f "$repo_dir/$relative_path" ]; then
+        printf 'Missing source: %s\n' "$repo_dir/$relative_path" >&2
         exit 1
     fi
-done
+done < "$file_list"
 
 if ! command -v python3 >/dev/null 2>&1; then
     printf 'python3 is required for Kitty project restoration.\n' >&2
     exit 1
 fi
+if ! command -v fish >/dev/null 2>&1; then
+    printf 'fish is required for this Kitty + tmux configuration.\n' >&2
+    exit 1
+fi
+if [ ! -x /usr/bin/fish ]; then
+    printf 'Expected fish at /usr/bin/fish for tmux.\n' >&2
+    exit 1
+fi
 
-for relative_path in $files; do
-    source_path=$repo_dir/home/$relative_path
-    target_path=$HOME/$relative_path
+while IFS= read -r relative_path; do
+    source_path=$repo_dir/$relative_path
+    target_path=$HOME/${relative_path#home/}
 
     if [ -L "$target_path" ] && [ "$(readlink "$target_path")" = "$source_path" ]; then
         printf 'Already linked: %s\n' "$target_path"
@@ -81,7 +86,7 @@ for relative_path in $files; do
         mkdir -p -- "$(dirname -- "$target_path")"
         ln -s -- "$source_path" "$target_path"
     fi
-done
+done < "$file_list"
 
 printf 'Initialize local Kitty project state: %s\n' "$HOME/.local/state/kitty-tmux"
 if [ "$dry_run" -eq 0 ]; then
